@@ -5,13 +5,21 @@ import os
 wdr = config["workdir"]
 outdir = os.path.join(wdr, "output")
 alndir = os.path.join(wdr, "alignments")
+rawdir = os.path.join(wdr, "sequences")
 bbspec = os.path.join(wdr, "species.txt")
 input_bbone = os.path.join(wdr, "backbone.nwk")
 bbone = os.path.join(outdir, "backbone.nwk")
 trimalndir = os.path.join(outdir, "trimmed")
 
-TRIMMEDGENES = [os.path.join(outdir, "trimdump", f) for f in os.listdir(alndir) if
-                  os.path.isfile(os.path.join(alndir, f))]
+compute_msa = config.get("msa_config", {}).get("compute_msa", False)
+msa_tool = config.get("msa_config", {}).get("tool", "witch")
+
+# when compute_msa is True, workdir/alignments doesn't exist yet at parse time (uDance produces it),
+# so the gene list must come from workdir/sequences (the raw, unaligned input) instead.
+genesrcdir = rawdir if compute_msa else alndir
+GENES = [f for f in os.listdir(genesrcdir) if os.path.isfile(os.path.join(genesrcdir, f))]
+
+TRIMMEDGENES = [os.path.join(outdir, "trimdump", f) for f in GENES]
 
 udance_logpath = os.path.abspath(os.path.join(wdr, "udance.log"))
 
@@ -38,6 +46,23 @@ rule clean:
         """
             rm -r {outdir} 
         """
+
+if compute_msa:
+    rule compute_msa:
+        input: "%s/{gene}" % rawdir
+        output: "%s/{gene}" % alndir
+        params:
+            tool=msa_tool,
+            char=config["chartype"]
+        resources: cpus=config["resources"]["cores"],
+                   mem_mb=config["resources"]["large_memory"]
+        benchmark: "%s/benchmarks/compute_msa.{gene}.txt" % outdir
+        shell:
+            """
+            (
+            bash uDance/compute_msa.sh {input} {output} {params.tool} {params.char} {resources.cpus} {outdir}/msa_work/{wildcards.gene}
+            ) >> {udance_logpath} 2>&1
+            """
 
 rule trimtaper:
     input: "%s/{gene}" % alndir

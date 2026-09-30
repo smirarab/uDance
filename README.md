@@ -47,6 +47,10 @@ The specification of the run is defined in the config file `config.yaml`. In the
 
 If there is an input backbone tree as well, it should be locate it at `<workdir>/backbone.nwk` and `backbone` field in the config file should be set to `"tree"`.
 
+## MSA computation (optional)
+
+By default uDance expects pre-aligned per-gene FASTA files in `<workdir>/alignments`, as described above. Alternatively, uDance can compute these alignments itself: set `msa_config.compute_msa: True` in `config.yaml`, place one **unaligned** FASTA file per gene in `<workdir>/sequences` instead, and pick an aligner with `msa_config.tool` (`"witch"` or `"twilight"`). This applies identically no matter which `backbone` mode is used (`de-novo`, `tree`, or `list`) — MSA computation always runs once, before backbone selection or placement.
+
 ## Workflow overview
 
 uDance workflow is implemented using Snakemake. Below is the diagram of the rule graph showing the relationship between each stage in the workflow.
@@ -57,6 +61,7 @@ Brief summary of each rule:
 
 |     | Rule                  | Description                                                                          | #instances             |
 |-----|-----------------------|--------------------------------------------------------------------------------------|------------------------|
+| 0   | compute_msa           | (optional) MSA computation from raw sequences using WITCH or TWILIGHT               | `#genes`               |
 | 1   | trimtaper/trimcollect | Alignment trimming and error correction using ASTER                                  | `#genes`               |
 | 2   | mainlines             | Selection of a subset of sequences for backbone using Mainlines algorithm            | 1                      |
 | 3   | prepbackbonegenes     | Creating one partition for the selected backbone sequences                           | `#genes`               |
@@ -87,6 +92,8 @@ uDance workflow also outputs many intermediate files. These intermediate files c
 |:--------------------------------:|:----------------------------------------------------------------------------------------------------------:|
 |             chartype             |                                    Amino-acid or nucleotide characters                                     |
 |             backbone             |             Three backbone tree source options. (1) de-novo, (2) user tree, and (3) user list              |
+|      msa_config.compute_msa      |                 If True, compute MSAs from workdir/sequences instead of requiring pre-aligned input        |
+|          msa_config.tool         |                             MSA computation tool: "witch" or "twilight" (used when compute_msa is True)     |
 |      resources.large_memory      |                                    Large memory jobs memory limit (MB)                                     |
 |         resources.cores          |                                     Large memory jobs CPU cores limit                                      |
 |    trim_config.percent_nongap    |                           Sites with less non-gap fraction than below is removed                           |

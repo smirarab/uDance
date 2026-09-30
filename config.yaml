@@ -1,7 +1,17 @@
-# workdir must have a directory named "alignments" with each multiple-sequence alignments in a seperate fasta file.
+# workdir must have a directory named "alignments" with each multiple-sequence alignment in a separate fasta file.
+# if msa_config.compute_msa is True, uDance computes these alignments itself instead: workdir must then have a
+# directory named "sequences" with each gene's raw, unaligned sequences in a separate fasta file, and "alignments"
+# is populated automatically as output.
 workdir: "datasmall"
 # options are ["nuc", "prot"]
 chartype: "nuc"
+
+msa_config:
+  # if True, uDance computes the MSA itself from raw sequences in workdir/sequences.
+  # if False (default), workdir/alignments must already contain pre-aligned FASTA files (legacy behavior).
+  compute_msa: False
+  # options are ["witch", "twilight"]. Only used when compute_msa is True.
+  tool: "witch"
 
 # options are:
 # "de-novo": backbone species will be selected using mainlines (see the mainlines_config below)
