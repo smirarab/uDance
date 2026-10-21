@@ -14,10 +14,42 @@ trimalndir = os.path.join(outdir, "trimmed")
 compute_msa = config.get("msa_config", {}).get("compute_msa", False)
 msa_tool = config.get("msa_config", {}).get("tool", "witch")
 
-# when compute_msa is True, workdir/alignments doesn't exist yet at parse time (uDance produces it),
-# so the gene list must come from workdir/sequences (the raw, unaligned input) instead.
-genesrcdir = rawdir if compute_msa else alndir
-GENES = [f for f in os.listdir(genesrcdir) if os.path.isfile(os.path.join(genesrcdir, f))]
+if compute_msa:
+    # Raw per-gene input files in workdir/sequences are named <gene>.fna (nucleotide) and/or
+    # <gene>.faa (amino acid). When both are given for a gene, the protein (.faa) version is
+    # used for MSA computation. RAW_GENE_FILES maps each gene's output alignment filename
+    # ("<gene>.fasta", matching the existing alignments/ convention) to the chosen raw input
+    # path and its molecule type ("nuc"/"prot").
+    RAW_GENE_FILES = {}
+    for f in sorted(os.listdir(rawdir)):
+        base, ext = os.path.splitext(f)
+        if ext == ".fna":
+            RAW_GENE_FILES.setdefault(base, (os.path.join(rawdir, f), "nuc"))
+        elif ext == ".faa":
+            RAW_GENE_FILES[base] = (os.path.join(rawdir, f), "prot")
+
+    # chartype still drives every downstream step (mainlines, prepbackbonegenes, placement,
+    # decompose) as a single global setting. Fail fast here if any gene's actual .fna/.faa
+    # content disagrees with it, rather than silently feeding mistyped alignments downstream.
+    for gene_base, (raw_path, molecule) in RAW_GENE_FILES.items():
+        if molecule != config["chartype"]:
+            raise ValueError(
+                "msa_config.compute_msa: %s is a %s file but config.yaml's chartype is '%s'. "
+                "chartype must match the molecule type of your workdir/sequences input."
+                % (raw_path, {"nuc": "nucleotide (.fna)", "prot": "amino-acid (.faa)"}[molecule], config["chartype"])
+            )
+
+    GENES = ["%s.fasta" % base for base in RAW_GENE_FILES]
+
+    def compute_msa_input(wildcards):
+        base = os.path.splitext(wildcards.gene)[0]
+        return RAW_GENE_FILES[base][0]
+
+    def compute_msa_molecule(wildcards):
+        base = os.path.splitext(wildcards.gene)[0]
+        return RAW_GENE_FILES[base][1]
+else:
+    GENES = [f for f in os.listdir(alndir) if os.path.isfile(os.path.join(alndir, f))]
 
 TRIMMEDGENES = [os.path.join(outdir, "trimdump", f) for f in GENES]
 
@@ -49,11 +81,11 @@ rule clean:
 
 if compute_msa:
     rule compute_msa:
-        input: "%s/{gene}" % rawdir
+        input: compute_msa_input
         output: "%s/{gene}" % alndir
         params:
             tool=msa_tool,
-            char=config["chartype"]
+            char=compute_msa_molecule
         resources: cpus=config["resources"]["cores"],
                    mem_mb=config["resources"]["large_memory"]
         benchmark: "%s/benchmarks/compute_msa.{gene}.txt" % outdir
