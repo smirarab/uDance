@@ -1,7 +1,8 @@
 # workdir must have a directory named "alignments" with each multiple-sequence alignment in a separate fasta file.
 # if msa_config.compute_msa is True, uDance computes these alignments itself instead: workdir must then have a
-# directory named "sequences" with each gene's raw, unaligned sequences in a separate fasta file, and "alignments"
-# is populated automatically as output.
+# directory named "sequences" with each gene's raw, unaligned sequences as <gene>.fna (nucleotide) and/or
+# <gene>.faa (amino acid) - if both exist for a gene, .faa is used - and "alignments" is populated automatically
+# as output. The molecule type implied by .fna/.faa must match chartype below, or uDance will error out.
 workdir: "datasmall"
 # options are ["nuc", "prot"]
 chartype: "nuc"

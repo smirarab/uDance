@@ -29,6 +29,8 @@ uDance is highly-scalable end-to-end workflow for inferring phylogenomic trees o
 3.  `bash install.sh`
 4.  `conda activate udance`
 
+`install.sh` creates two conda environments: `udance` (the main environment, activated above) and `udance_twilight` (a small, separate environment containing only the `twilight` binary). This split exists because TWILIGHT's conda package requires a newer zlib than `gappa` can tolerate in the same environment — it's only relevant if you use `msa_config.tool: "twilight"` (see "MSA computation" below); `udance_twilight` is created automatically and uDance finds it on its own, no separate activation needed.
+
 
 ### Using docker image
 * Pull docker image.   
@@ -49,7 +51,11 @@ If there is an input backbone tree as well, it should be locate it at `<workdir>
 
 ## MSA computation (optional)
 
-By default uDance expects pre-aligned per-gene FASTA files in `<workdir>/alignments`, as described above. Alternatively, uDance can compute these alignments itself: set `msa_config.compute_msa: True` in `config.yaml`, place one **unaligned** FASTA file per gene in `<workdir>/sequences` instead, and pick an aligner with `msa_config.tool` (`"witch"` or `"twilight"`). This applies identically no matter which `backbone` mode is used (`de-novo`, `tree`, or `list`) — MSA computation always runs once, before backbone selection or placement.
+By default uDance expects pre-aligned per-gene FASTA files in `<workdir>/alignments`, as described above. Alternatively, uDance can compute these alignments itself: set `msa_config.compute_msa: True` in `config.yaml` and pick an aligner with `msa_config.tool` (`"witch"` or `"twilight"`). This applies identically no matter which `backbone` mode is used (`de-novo`, `tree`, or `list`) — MSA computation always runs once, before backbone selection or placement.
+
+When enabled, raw **unaligned** sequences go in `<workdir>/sequences` instead of `<workdir>/alignments`, one file per gene, named `<gene>.fna` (nucleotide) and/or `<gene>.faa` (amino acid) — e.g. `p0013.fna`. Both WITCH and TWILIGHT handle either molecule type; the file extension tells uDance which one a given gene is, rather than relying on the tool to auto-detect it. If a gene has both a `.fna` and a `.faa` file, the `.faa` (protein) version is used.
+
+`chartype` in `config.yaml` still controls every downstream step (`mainlines`, `placement`, `decompose`, etc.) as a single setting for the whole run, so it must match whichever molecule type your `.fna`/`.faa` files actually are. uDance checks this automatically and fails immediately with a clear error if a gene's file type disagrees with `chartype`, rather than silently feeding a mistyped alignment into the rest of the pipeline.
 
 ## Workflow overview
 
