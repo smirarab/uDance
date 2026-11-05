@@ -157,12 +157,12 @@ else:
                 cp {input_bbone} {output.bbone}
             '''
 
-rule placement_prep:
+rule old_placement_prep:
     input: b = bbone,
            ind = trimalndir
-    output: aln = os.path.join(outdir,"placement/backbone.fa"),
-            qry = os.path.join(outdir,"placement/query.fa"),
-            tre = os.path.join(outdir,"placement/backbone.tree")
+    output: aln = os.path.join(outdir,"old_placement/backbone.fa"),
+            qry = os.path.join(outdir,"old_placement/query.fa"),
+            tre = os.path.join(outdir,"old_placement/backbone.tree")
     params: char=config["chartype"],
             filtering=config["backbone_filtering"],
             f=config["apples_config"]["filter"],
@@ -171,12 +171,28 @@ rule placement_prep:
             v=config["apples_config"]["overlap"]
     resources: cpus=config["resources"]["cores"],
                mem_mb=config["resources"]["large_memory"]
-    benchmark: "%s/benchmarks/placement_prep.txt" % outdir
+    benchmark: "%s/benchmarks/old_placement_prep.txt" % outdir
     shell:
         """
             (
             bash uDance/create_concat_alignment.sh {input.ind} {input.b} {outdir} {params.char} {resources.cpus} {params.f} {params.m} {params.b} {params.v} {params.filtering}
-            ) >> {udance_logpath} 2>&1            
+            ) >> {udance_logpath} 2>&1
+        """
+
+rule placement_prep:
+    input: b = bbone,
+           ind = trimalndir
+    output: bbdir = directory(os.path.join(outdir,"placement/backbone")),
+            qdir = directory(os.path.join(outdir,"placement/query")),
+            tre = os.path.join(outdir,"placement/backbone.tree")
+    resources: cpus=config["resources"]["cores"],
+               mem_mb=config["resources"]["large_memory"]
+    benchmark: "%s/benchmarks/placement_prep.txt" % outdir
+    shell:
+        """
+            (
+            bash uDance/split_per_gene.sh {input.ind} {input.b} {outdir}
+            ) >> {udance_logpath} 2>&1
         """
 
 rule placement:
