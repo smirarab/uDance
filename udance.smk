@@ -8,7 +8,7 @@ alndir = os.path.join(wdr, "alignments")
 bbspec = os.path.join(wdr, "species.txt")
 input_bbone = os.path.join(wdr, "backbone.nwk")
 bbone = os.path.join(outdir, "backbone.nwk")
-trimalndir = os.path.join(outdir, "trimmed")
+trimalndir = alndir
 
 TRIMMEDGENES = [os.path.join(outdir, "trimdump", f) for f in os.listdir(alndir) if
                   os.path.isfile(os.path.join(alndir, f))]
@@ -16,6 +16,28 @@ TRIMMEDGENES = [os.path.join(outdir, "trimdump", f) for f in os.listdir(alndir) 
 udance_logpath = os.path.abspath(os.path.join(wdr, "udance.log"))
 
 localrules: all, clean, trimcollect, copybb
+
+rule trimtaper:
+    input: "%s/{gene}" % alndir
+    output: "%s/trimdump/{gene}" % outdir
+    params: thr=config["trim_config"]["percent_nongap"]
+    benchmark: "%s/benchmarks/trimtaper.{gene}.txt" % outdir
+    shell:
+        """
+            (
+            uDance/trimtaper.sh {input} {params.thr} {output}
+            ) >> {udance_logpath} 2>&1
+        """
+
+rule trimcollect:
+    input: TRIMMEDGENES
+    output: directory(os.path.join(outdir, "trimmed"))
+    shell:
+        """
+            (
+            mv {outdir}/trimdump {output}
+            ) >> {udance_logpath} 2>&1
+        """
 
 rule all:
     input: expand("%s/udance.{approach}.nwk" % outdir, approach=["incremental", "updates"])
@@ -39,27 +61,6 @@ rule clean:
             rm -r {outdir} 
         """
 
-rule trimtaper:
-    input: "%s/{gene}" % alndir
-    output: "%s/trimdump/{gene}" % outdir
-    params: thr=config["trim_config"]["percent_nongap"]
-    benchmark: "%s/benchmarks/trimtaper.{gene}.txt" % outdir
-    shell:
-        """
-            (
-            uDance/trimtaper.sh {input} {params.thr} {output}
-            ) >> {udance_logpath} 2>&1
-        """
-
-rule trimcollect:
-    input: TRIMMEDGENES
-    output: directory(os.path.join(outdir, "trimmed"))
-    shell:
-        """
-            (
-            mv {outdir}/trimdump {output}
-            ) >> {udance_logpath} 2>&1
-        """
 
 rule mainlines:
     input: trimalndir
