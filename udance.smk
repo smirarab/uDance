@@ -179,9 +179,22 @@ rule old_placement_prep:
             ) >> {udance_logpath} 2>&1
         """
 
+rule dedup:
+    input: ind = trimalndir,
+           b = bbone
+    output: directory(os.path.join(outdir,"deduped"))
+    benchmark: "%s/benchmarks/dedup.txt" % outdir
+    shell:
+        """
+            (
+            bash uDance/dedup_cross_gene.sh {input.ind} {output} {input.b}
+            ) >> {udance_logpath} 2>&1
+        """
+
 rule placement_prep:
     input: b = bbone,
-           ind = trimalndir
+           ind = trimalndir,
+           dedup = os.path.join(outdir,"deduped")
     output: bbdir = directory(os.path.join(outdir,"placement/backbone")),
             qdir = directory(os.path.join(outdir,"placement/query")),
             tre = os.path.join(outdir,"placement/backbone.tree")
@@ -191,7 +204,7 @@ rule placement_prep:
     shell:
         """
             (
-            bash uDance/split_per_gene.sh {input.ind} {input.b} {outdir}
+            bash uDance/split_bb_query_per_gene.sh {input.ind} {input.b} {outdir} {input.dedup}
             ) >> {udance_logpath} 2>&1
         """
 
