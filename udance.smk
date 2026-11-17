@@ -11,34 +11,52 @@ input_bbone = os.path.join(wdr, "backbone.nwk")
 bbone = os.path.join(outdir, "backbone.nwk")
 trimalndir = os.path.join(outdir, "trimmed")
 
-compute_msa = config.get("msa_config", {}).get("compute_msa", False)
-msa_tool = config.get("msa_config", {}).get("tool", "witch")
+msa_config = config.get("msa_config", {})
+compute_msa = msa_config.get("compute_msa", False)
+partition_mode = msa_config.get("partition_mode", "scratch")
+backbone_alignment_source = msa_config.get("backbone_alignment", "udance")
+userbbalndir = os.path.join(wdr, "backbone_alignments")
 
-if compute_msa:
-    # Raw per-gene input files in workdir/sequences are named <gene>.fna (nucleotide) and/or
-    # <gene>.faa (amino acid). When both are given for a gene, the protein (.faa) version is
-    # used for MSA computation. RAW_GENE_FILES maps each gene's output alignment filename
-    # ("<gene>.fasta", matching the existing alignments/ convention) to the chosen raw input
-    # path and its molecule type ("nuc"/"prot").
-    RAW_GENE_FILES = {}
-    for f in sorted(os.listdir(rawdir)):
+if partition_mode not in ("scratch", "extend"):
+    raise ValueError("msa_config.partition_mode must be 'scratch' or 'extend', got '%s'" % partition_mode)
+if backbone_alignment_source not in ("udance", "user"):
+    raise ValueError("msa_config.backbone_alignment must be 'udance' or 'user', got '%s'" % backbone_alignment_source)
+
+
+def typed_fasta_files(directory, setting):
+    # Per-gene files are named <gene>.fna (nucleotide) and/or <gene>.faa (amino acid); when both
+    # exist the .faa wins. Returns {gene: (path, "nuc"/"prot")}. chartype still drives every
+    # downstream step as a single global setting, so a file of the other type is an error rather
+    # than a mistyped alignment fed silently into the rest of the pipeline.
+    files = {}
+    for f in sorted(os.listdir(directory)):
         base, ext = os.path.splitext(f)
         if ext == ".fna":
-            RAW_GENE_FILES.setdefault(base, (os.path.join(rawdir, f), "nuc"))
+            files.setdefault(base, (os.path.join(directory, f), "nuc"))
         elif ext == ".faa":
-            RAW_GENE_FILES[base] = (os.path.join(rawdir, f), "prot")
-
-    # chartype still drives every downstream step (mainlines, prepbackbonegenes, placement,
-    # decompose) as a single global setting. Fail fast here if any gene's actual .fna/.faa
-    # content disagrees with it, rather than silently feeding mistyped alignments downstream.
-    for gene_base, (raw_path, molecule) in RAW_GENE_FILES.items():
+            files[base] = (os.path.join(directory, f), "prot")
+    for path, molecule in files.values():
         if molecule != config["chartype"]:
             raise ValueError(
-                "msa_config.compute_msa: %s is a %s file but config.yaml's chartype is '%s'. "
-                "chartype must match the molecule type of your workdir/sequences input."
-                % (raw_path, {"nuc": "nucleotide (.fna)", "prot": "amino-acid (.faa)"}[molecule], config["chartype"])
+                "%s: %s is a %s file but config.yaml's chartype is '%s'. "
+                "chartype must match the molecule type of your %s input."
+                % (setting, path, {"nuc": "nucleotide (.fna)", "prot": "amino-acid (.faa)"}[molecule],
+                   config["chartype"], directory)
             )
+    return files
 
+
+USER_BACKBONE_ALNS = {}
+if partition_mode == "extend" and backbone_alignment_source == "user":
+    if not os.path.isdir(userbbalndir):
+        raise ValueError("msa_config.backbone_alignment is 'user' but %s does not exist" % userbbalndir)
+    USER_BACKBONE_ALNS = {gene: path for gene, (path, _) in
+                          typed_fasta_files(userbbalndir, "msa_config.backbone_alignment").items()}
+
+if compute_msa:
+    # RAW_GENE_FILES maps each gene to its chosen raw input path and molecule type; the computed
+    # alignment is written as alignments/<gene>.fasta, matching the existing alignments/ convention.
+    RAW_GENE_FILES = typed_fasta_files(rawdir, "msa_config.compute_msa")
     GENES = ["%s.fasta" % base for base in RAW_GENE_FILES]
 
     def compute_msa_input(wildcards):
@@ -52,6 +70,9 @@ else:
     GENES = [f for f in os.listdir(alndir) if os.path.isfile(os.path.join(alndir, f))]
 
 TRIMMEDGENES = [os.path.join(outdir, "trimdump", f) for f in GENES]
+# Untrimmed per-gene alignments. Partitions take their raw sequences from these (gaps stripped)
+# rather than from trimmed/, since trimal -gt drops real residues along with gappy columns.
+ALIGNMENTFILES = [os.path.join(alndir, f) for f in GENES]
 
 udance_logpath = os.path.abspath(os.path.join(wdr, "udance.log"))
 
@@ -84,7 +105,6 @@ if compute_msa:
         input: compute_msa_input
         output: "%s/{gene}" % alndir
         params:
-            tool=msa_tool,
             char=compute_msa_molecule
         resources: cpus=config["resources"]["cores"],
                    mem_mb=config["resources"]["large_memory"]
@@ -92,7 +112,7 @@ if compute_msa:
         shell:
             """
             (
-            bash uDance/compute_msa.sh {input} {output} {params.tool} {params.char} {resources.cpus} {outdir}/msa_work/{wildcards.gene}
+            bash uDance/compute_msa.sh {input} {output} {params.char} {resources.cpus} {outdir}/msa_work/{wildcards.gene}
             ) >> {udance_logpath} 2>&1
             """
 
@@ -144,7 +164,7 @@ rule mainlines:
         """
 
 checkpoint prepbackbonegenes:
-    input: s=os.path.join(outdir, "backbone/0/species.txt"), a=trimalndir
+    input: s=os.path.join(outdir, "backbone/0/species.txt"), a=trimalndir, raw=ALIGNMENTFILES
     output: touch(os.path.join(outdir,"backbone/0/done.txt"))
     resources: cpus=config["resources"]["cores"],
                mem_mb=config["resources"]["large_memory"]
@@ -152,19 +172,22 @@ checkpoint prepbackbonegenes:
     params: sub=config["prep_config"]["sublength"],
             frag=config["prep_config"]["fraglength"],
             char=config["chartype"],
-            bck=config["backbone"]
+            # in tree mode the backbone partition is only needed as the source alignment that
+            # extend mode adds each partition onto; its gene trees are never built
+            skip="yes" if config["backbone"] == "tree" and not
+                 (partition_mode == "extend" and backbone_alignment_source == "udance") else "no"
     shell:
          # python calling shell calling python. looks terrible but
          # this way we are avoiding forking in snakemake main process
         '''
             (
-            if [ "{params.bck}" == "tree" ]; then
+            if [ "{params.skip}" == "yes" ]; then
                 touch {outdir}/backbone/0/done.txt
             else
                 python -c  "import multiprocessing as mp; \
                             mp.set_start_method('fork'); \
                             from uDance.prep_partition_alignments import prep_partition_alignments; \
-                            prep_partition_alignments('{input.a}', \
+                            prep_partition_alignments('{alndir}', \
                                           '{params.char}' == 'prot', \
                                           ['{input.s}'], \
                                           {resources.cpus}, \
@@ -180,7 +203,7 @@ checkpoint prepbackbonegenes:
 
 def aggregate_refine_bb_input(wildcards):
     checkpoint_output = os.path.dirname(checkpoints.prepbackbonegenes.get(**wildcards).output[0])
-    wc = glob_wildcards(os.path.join(checkpoint_output, "{j}/aln.fa"))
+    wc = glob_wildcards(os.path.join(checkpoint_output, "{j}/seq.fa"))
     return ["%s/backbone/0/%s/bestTree.nwk" % (outdir,j) for j in wc.j]
 
 if config["backbone"] != "tree":
@@ -267,7 +290,7 @@ rule placement:
 
 
 checkpoint decompose:
-    input: j=os.path.join(outdir,"placement.jplace"), ind=trimalndir
+    input: j=os.path.join(outdir,"placement.jplace"), ind=trimalndir, raw=ALIGNMENTFILES
     output: cst=os.path.join(outdir,"udance/color_spanning_tree.nwk")
     params:
         size=config["prep_config"]["cluster_size"],
@@ -296,11 +319,11 @@ checkpoint decompose:
                 echo "Cluster size is set to $clustsz (user-choice)"
             fi
             if [ "{params.char}" == "nuc" ]; then
-                python run_udance.py decompose -s {input.ind} -o {outdir}/udance -t $clustsz -j {input.j} \
+                python run_udance.py decompose -s {input.ind} --sequence-dir {alndir} -o {outdir}/udance -t $clustsz -j {input.j} \
                 -m {params.method} -T {resources.cpus} -l {params.sub} -f {params.frag} -e {params.edg} \
                 --minplacements {params.mps}
             else
-                python run_udance.py decompose -p -s {input.ind} -o {outdir}/udance -t $clustsz -j {input.j} \
+                python run_udance.py decompose -p -s {input.ind} --sequence-dir {alndir} -o {outdir}/udance -t $clustsz -j {input.j} \
                 -m {params.method} -T {resources.cpus} -l {params.sub} -f {params.frag} -e {params.edg} \
                 --minplacements {params.mps}
             fi
@@ -313,6 +336,41 @@ checkpoint decompose:
             fi
             ) >> {udance_logpath} 2>&1
         """
+
+def partition_msa_backbone(wildcards):
+    # The alignment extend mode adds this partition's queries onto, or [] to align from scratch.
+    if partition_mode != "extend":
+        return []
+    if backbone_alignment_source == "user":
+        return [USER_BACKBONE_ALNS[wildcards.gene]] if wildcards.gene in USER_BACKBONE_ALNS else []
+    if wildcards.stage == "backbone":
+        # this partition is the source alignment itself
+        return []
+    checkpoints.prepbackbonegenes.get()
+    if os.path.exists(os.path.join(outdir, "backbone/0", wildcards.gene, "seq.fa")):
+        return [os.path.join(outdir, "backbone/0", wildcards.gene, "aln.fa")]
+    return []
+
+# per-partition MSA: aligns each partition's raw sequences of one gene, then trims them
+rule partition_msa:
+    input:
+        seq="%s/{stage}/{cluster}/{gene}/seq.fa" % outdir,
+        backbone=partition_msa_backbone
+    output:
+        "%s/{stage}/{cluster}/{gene}/aln.fa" % outdir
+    params:
+        mode=partition_mode,
+        bb=lambda wildcards: (partition_msa_backbone(wildcards) or ["none"])[0],
+        char=config["chartype"],
+        trimthr=config["trim_config"]["percent_nongap"],
+        work=lambda wildcards: os.path.join(outdir, "msa_work", wildcards.stage, wildcards.cluster, wildcards.gene)
+    log: "%s/{stage}/{cluster}/{gene}/msa.log" % outdir
+    benchmark: "%s/{stage}/{cluster}/{gene}/msa_benchmark.txt" % outdir
+    shell:
+        '''
+            bash uDance/partition_msa.sh {input.seq} {output} {params.mode} {params.bb} \
+                {params.char} {params.trimthr} {threads} {params.work} > {log} 2>&1
+        '''
 
 # phy inf
 rule genetreeinfer:
@@ -340,7 +398,7 @@ rule genetreeinfer:
 
 def aggregate_refine_input(wildcards):
     checkpoint_output = os.path.dirname(checkpoints.decompose.get(**wildcards).output[0])
-    wc = glob_wildcards(os.path.join(checkpoint_output, "%s/{j}/aln.fa" % wildcards.cluster))
+    wc = glob_wildcards(os.path.join(checkpoint_output, "%s/{j}/seq.fa" % wildcards.cluster))
     return ["%s/udance/%s/%s/bestTree.nwk" % (outdir, wildcards.cluster,j) for j in wc.j]
 
 

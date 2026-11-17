@@ -14,6 +14,17 @@ export STARTS=$3
 export ITOOL=$4
 export NUMTHREADS=$5
 
+if [[ "$ITOOL" == "raxml-ng" ]] ; then
+  # RAxML-NG 2.0 lives in its own conda env (udance_raxmlng): its htslib dependency needs zlib>=1.3,
+  # which conflicts with the zlib<1.3 pins of gappa/iqtree/julia in the main env (see install.sh).
+  export RAXMLNG_BIN="$(conda info --base)/envs/udance_raxmlng/bin/raxml-ng"
+  if [[ ! -x "$RAXMLNG_BIN" ]] ; then
+    echo "ERROR: $RAXMLNG_BIN not found or not executable." >&2
+    echo "Run install.sh to create the udance_raxmlng conda environment first." >&2
+    exit 1
+  fi
+fi
+
 SHMT=`mktemp -dt processmarkerXXXXXX`
 cp $1 $SHMT/$ALN
 pushd $SHMT > /dev/null
@@ -83,7 +94,7 @@ run_a_start(){
   pushd $TREEID > /dev/null
     ln -s ../shrunk.fasta
     if [[ "$ITOOL" == "raxml-ng" ]] ; then
-      if raxml-ng --msa shrunk.fasta --tree pars{1} --model ${NGMODEL} --threads 1 --seed $TREEID --prefix RUN --lh-epsilon 0.5 > raxml-ng.log 2>&1; then
+      if "$RAXMLNG_BIN" --msa shrunk.fasta --tree pars{1} --model ${NGMODEL} --threads 1 --seed $TREEID --prefix RUN --lh-epsilon 0.5 > raxml-ng.log 2>&1; then
         nw_topology -bI RUN.raxml.bestTree | nw_order - > RAxML_result.RUN
         grep "Final" RUN.raxml.log | cut -f3 -d ' ' > likelihood.txt
         iqtree -T 1 -abayes -m ${IQMODEL} -s shrunk.fasta -te RAxML_result.RUN -seed $TREEID --redo > iqtree.out 2> iqtree.err

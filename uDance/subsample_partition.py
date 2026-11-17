@@ -27,7 +27,7 @@ def subsample_partition(partition_output_dir, limit):
 
     start = time.time()
     for g in genes:
-        with open(join(g, 'aln.fa')) as af:
+        with open(join(g, 'seq.fa')) as af:
             glabels = [name_to_ind[name] for name, seq, _ in readfq(af) if name in name_to_ind]
             for i in glabels:
                 counts_i[i] += 1
@@ -133,7 +133,7 @@ def subsample_partition(partition_output_dir, limit):
 
     for g in genes:
         aln_dict = dict()
-        with open(join(g, 'aln.fa')) as af:
+        with open(join(g, 'seq.fa')) as af:
             for name, seq, _ in readfq(af):
                 aln_dict[name] = seq
 
@@ -167,7 +167,7 @@ def subsample_partition(partition_output_dir, limit):
                 if len(v) > 1:
                     duplist.append('\t'.join(v))
 
-            aln_output_path = join(g, 'aln.fa')
+            aln_output_path = join(g, 'seq.fa')
             with open(aln_output_path, 'w', buffering=100000000) as f:
                 f.write('\n'.join(res))
                 f.write('\n')

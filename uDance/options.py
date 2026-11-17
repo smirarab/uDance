@@ -106,6 +106,14 @@ def options_config():
         metavar='FILE',
     )
     parser_decompose.add_argument(
+        '--sequence-dir',
+        dest='sequence_dir_fp',
+        default=None,
+        help='directory of per-gene FASTA files (aligned or not; gaps are stripped) from which '
+        'each partition\'s raw sequences are taken. Defaults to --alignment-dir.',
+        metavar='DIRECTORY',
+    )
+    parser_decompose.add_argument(
         '-p',
         '--protein',
         dest='protein_seqs',

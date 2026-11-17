@@ -336,7 +336,7 @@ def decompose(options):
     pool.join()
 
     all_scripts = prep_partition_alignments(
-        options.alignment_dir_fp,
+        options.sequence_dir_fp or options.alignment_dir_fp,
         options.protein_seqs,
         [pth for pth, skip in species_path_list if not skip],
         options.num_thread,
@@ -351,7 +351,7 @@ def decompose(options):
         main_script.write('\n')
         main_script.close()
 
-    indvalns = glob.glob(join(options.output_fp, '*/*/aln.fa'))
+    indvalns = glob.glob(join(options.output_fp, '*/*/seq.fa'))
 
     with open(join(options.output_fp, 'jobsizes.txt'), 'w', buffering=10000000) as js:
         for p in indvalns:

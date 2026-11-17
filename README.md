@@ -29,7 +29,7 @@ uDance is highly-scalable end-to-end workflow for inferring phylogenomic trees o
 3.  `bash install.sh`
 4.  `conda activate udance`
 
-`install.sh` creates two conda environments: `udance` (the main environment, activated above) and `udance_twilight` (a small, separate environment containing only the `twilight` binary). This split exists because TWILIGHT's conda package requires a newer zlib than `gappa` can tolerate in the same environment — it's only relevant if you use `msa_config.tool: "twilight"` (see "MSA computation" below); `udance_twilight` is created automatically and uDance finds it on its own, no separate activation needed.
+`install.sh` creates two conda environments: `udance` (the main environment, activated above) and `udance_raxmlng` (only RAxML-NG 2.0). The split exists because RAxML-NG 2.0 needs a newer zlib than `gappa`, `iqtree` and `julia` tolerate in the main environment. uDance finds `udance_raxmlng` on its own; there is nothing to activate. Re-running `install.sh` on a machine that already has `udance` creates `udance_raxmlng` if it is missing.
 
 
 ### Using docker image
@@ -51,11 +51,27 @@ If there is an input backbone tree as well, it should be locate it at `<workdir>
 
 ## MSA computation (optional)
 
-By default uDance expects pre-aligned per-gene FASTA files in `<workdir>/alignments`, as described above. Alternatively, uDance can compute these alignments itself: set `msa_config.compute_msa: True` in `config.yaml` and pick an aligner with `msa_config.tool` (`"witch"` or `"twilight"`). This applies identically no matter which `backbone` mode is used (`de-novo`, `tree`, or `list`) — MSA computation always runs once, before backbone selection or placement.
+By default uDance expects pre-aligned per-gene FASTA files in `<workdir>/alignments`, as described above. Alternatively, uDance can compute these alignments itself: set `msa_config.compute_msa: True` in `config.yaml`, and uDance aligns them with WITCH. This applies identically no matter which `backbone` mode is used (`de-novo`, `tree`, or `list`) — MSA computation always runs once, before backbone selection or placement.
 
-When enabled, raw **unaligned** sequences go in `<workdir>/sequences` instead of `<workdir>/alignments`, one file per gene, named `<gene>.fna` (nucleotide) and/or `<gene>.faa` (amino acid) — e.g. `p0013.fna`. Both WITCH and TWILIGHT handle either molecule type; the file extension tells uDance which one a given gene is, rather than relying on the tool to auto-detect it. If a gene has both a `.fna` and a `.faa` file, the `.faa` (protein) version is used.
+When enabled, raw **unaligned** sequences go in `<workdir>/sequences` instead of `<workdir>/alignments`, one file per gene, named `<gene>.fna` (nucleotide) and/or `<gene>.faa` (amino acid) — e.g. `p0013.fna`. WITCH handles either molecule type; the file extension tells uDance which one a given gene is, rather than relying on WITCH to auto-detect it. If a gene has both a `.fna` and a `.faa` file, the `.faa` (protein) version is used.
 
 `chartype` in `config.yaml` still controls every downstream step (`mainlines`, `placement`, `decompose`, etc.) as a single setting for the whole run, so it must match whichever molecule type your `.fna`/`.faa` files actually are. uDance checks this automatically and fails immediately with a clear error if a gene's file type disagrees with `chartype`, rather than silently feeding a mistyped alignment into the rest of the pipeline.
+
+## Per-partition MSA
+
+Gene trees are not built from slices of the input alignments. After `decompose` has split the taxa into partitions, each partition's raw sequences for a gene are written to `<partition>/<gene>/seq.fa`, aligned on their own with WITCH, trimmed (the same `trimtaper` steps: gappy-column removal, deduplication, end tapering), and written to `<partition>/<gene>/aln.fa`, which gene tree inference reads. The backbone partition (`backbone/0`) is handled the same way.
+
+`msa_config.partition_mode` chooses how each partition is aligned. It is independent of `backbone`:
+
+-   `"scratch"` (default): align all of the partition's sequences, backbone and query, from nothing.
+-   `"extend"`: start from a backbone alignment, keep its rows for the backbone taxa that are in the partition, and add the partition's other (query) sequences onto them (WITCH `-b`/`-q`). A partition with fewer than 4 backbone rows is aligned from scratch instead.
+
+In `"extend"` mode, `msa_config.backbone_alignment` chooses the backbone alignment:
+
+-   `"udance"` (default): the backbone partition's own per-partition alignment, `backbone/0/<gene>/aln.fa`. With `backbone: "tree"` uDance still builds this alignment, but not the backbone gene trees.
+-   `"user"`: your own aligned files in `<workdir>/backbone_alignments/<gene>.fna` or `.faa` (same naming and `chartype` rule as above). Taxa that appear in this alignment use their aligned rows; their entries in `<workdir>/sequences`, if any, are ignored.
+
+The input alignments (`<workdir>/alignments`, or the output of `compute_msa`) are still needed: `trimtaper`, `mainlines` and APPLES-2 placement read them before partitions exist.
 
 ## Workflow overview
 
@@ -67,18 +83,19 @@ Brief summary of each rule:
 
 |     | Rule                  | Description                                                                          | #instances             |
 |-----|-----------------------|--------------------------------------------------------------------------------------|------------------------|
-| 0   | compute_msa           | (optional) MSA computation from raw sequences using WITCH or TWILIGHT               | `#genes`               |
+| 0   | compute_msa           | (optional) Input MSA computation from raw sequences using WITCH                     | `#genes`               |
 | 1   | trimtaper/trimcollect | Alignment trimming and error correction using ASTER                                  | `#genes`               |
 | 2   | mainlines             | Selection of a subset of sequences for backbone using Mainlines algorithm            | 1                      |
 | 3   | prepbackbonegenes     | Creating one partition for the selected backbone sequences                           | `#genes`               |
-| 4   | genetreeinfer         | Gene tree inference (RAxML, IQTree-2, or RAxML-NG)                                   | `#genes × #partitions` |
+| 4a  | partition_msa         | Per-partition MSA (scratch or extend) followed by trimming                           | `#genes × #partitions` |
+| 4b  | genetreeinfer         | Gene tree inference (RAxML-NG 2.0 by default, RAxML-8, or IQTree-2)                  | `#genes × #partitions` |
 | 5   | refine                | ASTRAL species tree inference                                                        | `#partitions`          |
 | 6   | placement_prep        | Backbone quality control, filtering, and MSA concatenation of phylogenetic placement | 1                      |
 | 7   | placement             | Phylogenetic placement of query sequences onto backbone tree using APPLES-2          | 1                      |
 | 8   | decompose             | Placement tree decomposition algorithm and creation of partitions                    | 1                      |
 | 9   | stitch                | Stitching algorithm for partition species trees                                      | 1                      |
 
-Note that `genetreeinfer` and `refine` rules is used in two separate parts of the workflow: once to obtain the backbone tree (de-novo) and once on every the partition created after phylogenetic placement.
+Note that `partition_msa`, `genetreeinfer` and `refine` rules is used in two separate parts of the workflow: once to obtain the backbone tree (de-novo) and once on every the partition created after phylogenetic placement.
 
 ## Output
 
@@ -86,7 +103,7 @@ uDance writes its output under the directory `<workdir>/output`. The workflow ou
 
 uDance workflow also outputs many intermediate files. These intermediate files can be useful for user for debugging as well as to supplement the downstream analysis. All paths below are given in relative to the output directory `<workdir>/output`.
 
-1.  `trimmed` containes trimmed input MSAs.
+1.  `trimmed` containes trimmed input MSAs. Inside every partition (`backbone/0/<gene>` and `udance/<partition>/<gene>`), `seq.fa` holds the partition's raw sequences, `aln.fa` their per-partition alignment after trimming, and `msa.log`/`msa_benchmark.txt` the log and timing of that step.
 2.  `backbone.nwk` is the backbone file. If there is an input backbone tree, it's identical to the input backbone tree. Otherwise, backbone sequences are selected using Mainlines algorithm and selected sequence IDs are written to `backbone/0/species.txt`. Gene trees for the selected sequences are found in the directory `backbone/0/<gene>`. This directory contains subdirectories named `1` to `k`, where `k` is the number of starting trees for the inference of the gene tree for this gene. `backbone/0/<gene>/<i>/shrunk.fasta.treefile` is the inferred maximum likelihood tree for the gene using the starting tree `i`. The highest likelihood tree among all `k` starts is `backbone/0/<gene>/bestTree.nwk` and relative-path to the starting tree that yielded the highest likelihood is `backbone/0/<gene>/bestTreename.txt`. All gene trees in newick format are written to `backbone/0/astral_input.trees`, one line per tree. This file is provided to ASTRAL as the input. No constraint tree is used during the estimation of the backbone tree. ASTRAL's output file (a newick tree) is `backbone/0/astral_output.updates.nwk`.
 3.  `placement` contains the backbone and query alignments and the backbone tree used at the placement stage. `placement.jplace` is the jplace file output by APPLES-2.
 4.  The partitions created by uDance are located under the directory `udance`. This directory contains subdirectories named `0` to `p-1`, where `p` is the number of partitions designated for the uDance run. `atasmall/output/udance/<partition>/species.txt` contains the list of backbone, query, and outgroup sequences in the partition. The organization of the partition is almost identical to the "partition" `backbone/0` given in the item 2 above but there are a few differences. `datasmall/output/udance/<partition>/astral_constraint.nwk` and `datasmall/output/udance/<partition>/raxml_constraint.nwk` are the two kinds of constraint trees used in ASTRAL stage. The former results in an ASTRAL tree (`datasmall/output/udance/<partition>/astral_output.incremental.nwk`) that retains the backbone tree topology and the latter allows topological changes aming the backbone sequences (`datasmall/output/udance/<partition>/astral_output.updates.nwk`).
@@ -99,7 +116,8 @@ uDance workflow also outputs many intermediate files. These intermediate files c
 |             chartype             |                                    Amino-acid or nucleotide characters                                     |
 |             backbone             |             Three backbone tree source options. (1) de-novo, (2) user tree, and (3) user list              |
 |      msa_config.compute_msa      |                 If True, compute MSAs from workdir/sequences instead of requiring pre-aligned input        |
-|          msa_config.tool         |                             MSA computation tool: "witch" or "twilight" (used when compute_msa is True)     |
+|     msa_config.partition_mode    |                     How each partition is aligned: "scratch" (default) or "extend"                         |
+|   msa_config.backbone_alignment  |        "extend" mode only: backbone alignment source, "udance" (default) or "user" (workdir/backbone_alignments) |
 |      resources.large_memory      |                                    Large memory jobs memory limit (MB)                                     |
 |         resources.cores          |                                     Large memory jobs CPU cores limit                                      |
 |    trim_config.percent_nongap    |                           Sites with less non-gap fraction than below is removed                           |
@@ -112,10 +130,10 @@ uDance workflow also outputs many intermediate files. These intermediate files c
 |      apples_config.overlap       |                                APPLES-2 minimum alignment overlap fraction                                 |
 |       prep_config.edge_thr       |                                          Partition diameter limit                                          |
 |     prep_config.cluster_size     |           Approximate partition size. Options are (1) auto, (2) fast, (3) user defined integer.            |
-|      prep_config.sublength       |             Minimum partition alignment length. If not satisfied, the partition is discarded.              |
+|      prep_config.sublength       |    Minimum length of a partition's longest sequence for a gene. If not satisfied, the gene is skipped.     |
 |      prep_config.pruneafter      |                                           Maximum partition size                                           |
 |    prep_config.min_placements    |       The maximum number of placements occurred for the partition to be skipped to save running time       |
-|       infer_config.method        |                        Gene tree inference method (RAxML-ng, IQTree-2, or RAxML-8)                         |
+|       infer_config.method        |              Gene tree inference method: raxml-ng (default, RAxML-NG 2.0), iqtree, or raxml-8              |
 |      infer_config.numstart       |                                        The number of starting trees                                        |
 |     infer_config.num_threads     |         The number of starting tree instances that run concurrently (max: infer_config.numstart)           |
 |      refine_config.contract      |                            Contract low support (IQTree-2 aBayes test) branches                            |

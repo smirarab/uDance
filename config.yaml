@@ -11,8 +11,15 @@ msa_config:
   # if True, uDance computes the MSA itself from raw sequences in workdir/sequences.
   # if False (default), workdir/alignments must already contain pre-aligned FASTA files (legacy behavior).
   compute_msa: False
-  # options are ["witch", "twilight"]. Only used when compute_msa is True.
-  tool: "witch"
+  # How each partition's alignment is built, right before its gene trees (independent of "backbone" below).
+  # "scratch": align all of the partition's sequences (backbone + query) from nothing.
+  # "extend": keep the backbone alignment's rows for the partition's backbone taxa and add the partition's
+  #           query sequences onto them. Falls back to "scratch" for a partition with fewer than 4 backbone rows.
+  partition_mode: "scratch"
+  # extend mode only: where the backbone alignment comes from.
+  # "udance": the backbone partition's own per-partition alignment (output/backbone/0/<gene>/aln.fa).
+  # "user": workdir/backbone_alignments/<gene>.fna or .faa (aligned; .faa wins if both exist).
+  backbone_alignment: "udance"
 
 # options are:
 # "de-novo": backbone species will be selected using mainlines (see the mainlines_config below)
@@ -72,7 +79,7 @@ prep_config:
 
 infer_config:
   # [raxml-ng,iqtree,raxml-8]
-  method: "raxml-8"
+  method: "raxml-ng"
   # number of starting trees
   numstart: 2
   # number of starting tree instances that run concurrently

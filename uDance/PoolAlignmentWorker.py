@@ -2,56 +2,52 @@ import os
 from os.path import join
 from pathlib import Path
 
-import numpy as np
-
 
 class PoolAlignmentWorker:
     subalignment_length = None
     fragment_length = None
-    fa_dict = None
+    seq_dict = None
+    valid_translation = None
     basename = None
 
     @classmethod
-    def set_class_attributes(cls, subalignment_length, fragment_length, fa_dict, basename):
+    def set_class_attributes(cls, subalignment_length, fragment_length, seq_dict, valid_translation, basename):
         cls.subalignment_length = subalignment_length
         cls.fragment_length = fragment_length
-        cls.fa_dict = fa_dict
+        cls.seq_dict = seq_dict
+        cls.valid_translation = valid_translation
         cls.basename = basename
 
+    # Writes the partition's raw (unaligned) sequences for this gene to <partition>/<gene>/seq.fa.
+    # The partition_msa rule aligns it into aln.fa, which genetreeinfer reads.
     #  TODO raise error if directory exists
     @classmethod
     def worker(cls, sp_path):
         with open(sp_path) as file:
             species = file.readlines()
             species = set([line.rstrip() for line in species])
-        partition_aln = {key: cls.fa_dict[key] for key in species if key in cls.fa_dict}
+        partition_seqs = {key: cls.seq_dict[key] for key in species if key in cls.seq_dict}
         partition_output_dir = os.path.dirname(sp_path)
-        if len(partition_aln) < 4:
+        if len(partition_seqs) < 4:
             return None
-        aln_length = len(next(iter(partition_aln.values())))
-        not_all_gap = np.array([False] * aln_length)
-        for s in partition_aln.values():
-            not_all_gap = np.logical_or(not_all_gap, (s != b'-'))
-        removelist = []
-        for k, v in partition_aln.items():
-            ungapped = v[not_all_gap]
-            if sum(ungapped != b'-') >= 75:
-                partition_aln[k] = ungapped
-            else:
-                removelist.append(k)
+        # residues counted the same way fasta2dic did when this worker sliced alignments
+        # (ambiguity codes such as N don't count), but they are kept in the written sequence.
+        removelist = [
+            k for k, v in partition_seqs.items()
+            if len(v.translate(cls.valid_translation).replace('-', '')) < cls.fragment_length
+        ]
         print(
             '%d fragmentary sequences are removed from gene %s on partition %s.'
             % (len(removelist), cls.basename, partition_output_dir)
         )
         for k in removelist:
-            partition_aln.pop(k)
+            partition_seqs.pop(k)
+        if len(partition_seqs) < 4:
+            return None
 
-        trimmed_aln_length = len(next(iter(partition_aln.values())))
-
-        # deduplicate the alignment
+        # deduplicate the sequences
         seq_keyed_dict = {}
-        for name, sba in partition_aln.items():
-            seq = sba.tostring().decode('UTF-8')
+        for name, seq in partition_seqs.items():
             if seq in seq_keyed_dict:
                 seq_keyed_dict[seq].append(name)
             else:
@@ -59,8 +55,9 @@ class PoolAlignmentWorker:
 
         seq_keyed_dict = {k: sorted(v) for k, v in seq_keyed_dict.items()}
 
-        if trimmed_aln_length >= cls.subalignment_length and len(seq_keyed_dict) >= 4:
-            # write trimmed MSA fasta
+        # no alignment exists yet, so the longest sequence stands in for the alignment length
+        longest = max(len(s) for s in seq_keyed_dict)
+        if longest >= cls.subalignment_length and len(seq_keyed_dict) >= 4:
             res = []
             duplist = []
             for k, v in sorted(seq_keyed_dict.items()):
@@ -71,7 +68,7 @@ class PoolAlignmentWorker:
 
             aln_outdir = join(partition_output_dir, cls.basename)
             Path(aln_outdir).mkdir(parents=True, exist_ok=True)
-            aln_output_path = join(aln_outdir, 'aln.fa')
+            aln_output_path = join(aln_outdir, 'seq.fa')
             with open(aln_output_path, 'w', buffering=100000000) as f:
                 f.write('\n'.join(res))
                 f.write('\n')
